@@ -2,9 +2,37 @@
 layout: post
 title: "Function 단위 설계"
 date: 2025-07-20 12:00:00 +0900
-categories: [Secret Manager, OpenBao, Architecture]
+categories: [Secret Manager, OpenBao, Spring Security]
 ---
-controller →　service → 외부 application 구조의 아키텍처
+클라이언트가 OpenBao에 저장된 특정 시크릿을 조회하고자 할 때, 사전에 등록된 IP인지 검증한 후, 허용된 경우에만 Extension API를 통해 실제 시크릿을 반환하도록 한다.
+실제 사용자가 등록하는 시크릿은 account별로 네임스페이스가 생성되고 하위헤 kv-v2/secret1, kv-v2/secret2 이런식으로 저장된다.
+IP 접근제어를 위한 허용IP리스트는 iprestriction 네임스페이스 하위에서 생성 kv-v2/accountID/secret# 
+
+```
+
+        Client
+          |
+          | GET /api/secret?account={account_id}&secretPath={kv-v2/secret/db-password}
+          ↓
+        SecretController 
+          |
+        SecretService
+          ├─▶ Extract Real IP (Spring Security)
+          |
+        OpenBaoClient 호출
+          |
+          ├─▶ isIpAllowed(secretPath, clientIp)  ← OpenBao 메타데이터에서 IP 확인
+          |       └─ 호출: GET /v1/<namespace>/kv-v2/metadata/<path_to_secret>
+          |               --header "X-Vault-Token: <your_token>"
+        SecretService
+          |
+        SecretController
+          ├─▶ [허용된 IP] → callExtension(secretPath, clientIp)
+          |       └─ 호출: GET https://security-extension/secret?path=secretPath&account=account
+          |
+          └─▶ [비허용 IP] → 403 Forbidden 응답
+  
+ ```
 
 ## Controller
 ```
