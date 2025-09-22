@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Exception"
-date: 2025-08-09 12:00:00 +0900
+date: 2025-09-23 12:00:00 +0900
 categories: [exception]
 ---
 GlobalExceptionHandler는 애플리케이션 전역에서 발생하는 예외를 한 곳에서 수집·표준화해서 처리하는 컴포넌트입니다. 장점은 다음과 같습니다.
