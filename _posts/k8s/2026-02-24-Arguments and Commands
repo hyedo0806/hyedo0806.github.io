@@ -1,0 +1,39 @@
+---
+title: Arguments and Comments 
+date: 2026-02-24 23:59:59
+categories: [Spring Security]
+tags: [security]     # TAG names should always be lowercase
+---
+
+```
+FROM Ubuntu
+CMD sleep 5
+```
+```
+$ docker run ubuntu-sleeper sleep 10
+--> sleep 5가 sleep 10으로 대체됨(대체할 항목 통채로)
+```
+
+```
+FROM Ubuntu
+ENTRYPOINT ["sleep"]
+```
+```
+$ docker run ubuntu-sleeper 10
+--> 인자만 
+```
+
+### 사용예시
+```
+FROM Ubuntu
+ENTRYPOINT ["sleep"]
+CMD ["5"]
+```
+
+```
+$ docker run ubuntu-sleepr 
+--> sleep 5
+
+$ docker run ubuntu-sleeper 10
+--> sleep 10 (cmd의 5를 대체)
+```
