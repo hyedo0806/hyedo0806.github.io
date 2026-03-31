@@ -1,0 +1,335 @@
+# Go 표준 테스트 
+Go는 간편하게 사용할 수 있는 테스트 프레임워크를 내장하고 있다.
+`` go test`` 명령을 실행하여 현재 폴더에 있는 *_test.go 파일들을 테스트 코드로 인식하고 일괄적으로 실행한다.
+``testing`` 패키지를 import하여 사용.
+## Go 표준 테스트 기본 구조
+```
+package calc
+ 
+// Sum -
+func Sum(a ...int) int {
+    sum := 0
+    for _, i := range a {
+        sum += i
+    }
+    return sum
+}
+```
+```
+package calc_test
+ 
+import (
+    "calc"
+    "testing"
+)
+ 
+func TestSum(t *testing.T) {
+    s := calc.Sum(1, 2, 3)
+ 
+    if s != 6 {
+        t.Error("Wrong result")
+    }
+}
+```
+
+### 핵심 규칙
+- 함수명: TestXxx(t *testing.T) 
+- 파일명 : xxx_test.go 
+    go 빌드 시 제외, 테스트 실행 시만 포함함
+
+## Table-driven Test 
+```
+func TestValidateRoutePath(t *testing.T) {
+    tests := []struct {
+        name    string
+        path    string
+        wantErr bool
+        errCode string
+    }{
+        {"valid absolute path",    "/v1/users",    false, ""},
+        {"valid wildcard",         "/v1/users/*",  false, ""},
+        {"missing leading slash",  "v1/users",     true,  "INVALID_PATH"},
+        {"empty path",             "",             true,  "EMPTY_PATH"},
+        {"double slash",           "//v1/users",   true,  "INVALID_PATH"},
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // t.Run → 서브테스트: go test -run TestValidateRoutePath/valid_absolute_path
+            err := ValidateRoutePath(tt.path)
+
+            if (err != nil) != tt.wantErr {
+                t.Errorf("wantErr=%v, got err=%v", tt.wantErr, err)
+            }
+            if tt.wantErr && err != nil {
+                var routeErr *RouteValidationError
+                if errors.As(err, &routeErr) && routeErr.Code != tt.errCode {
+                    t.Errorf("wantCode=%s, got=%s", tt.errCode, routeErr.Code)
+                }
+            }
+        })
+    }
+}
+```
+#### t.Run의 장점
+특정 케이스만 실행 가능<br>
+``go test -run TestValidateRoutePath/empty_path``
+실패한 서브테스트만 다시 돌릴 수 있어 디버깅이 빠름
+
+## t.Errorf vs t.Fatalf
+### t.Errorf
+에러 기록, 계속 실행
+검증 실패 등등
+
+### t.Fatalf 
+즉시 중단
+초기화 실패 등
+
+```
+if err != nil {
+    t.Fatalf("setup failed")
+}
+
+if result != want {
+    t.Errorf("wrong result")
+}
+```
+
+## VSCode에서 테스트 코드 생성하기
+테스트를 빠르게 작성하고 바로 실행하기<br>
+go 표준 테스트에 대해서만 적용(ginkgo 프레임워크에서는 사용 불가)<br>
+### 테스트 자동 생성
+함수 위에서 우클릭 
+> Go: Generate Unit Tests
+
+(gopls 기반)
+
+### 실행
+테스트 코드 위에 생성된 버튼 클릭
+> Run Test | Debug Test 
+
+### 커버리지 측정
+> Go: Toggle Test Coverage
+
+
+# Operator 테스트
+Kubernetes Operator는 단순 함수 호출 결과만 검증하는 구조가 아니다. <br> 보통 우리가 테스트하고 싶은 것은 <br> **(1) CRD 생성 이후 상태가 어떻게 바뀌는지** <br> **(2)Reconcile이 여러 번 반복되면서 원하는 수렴 상태로 가는지** <br>**(3)실제 Kubernetes API 서버와 비슷한 환경에서 controller가 제대로 동작하는지**다. <br>
+
+### go test의 한계
+기본 Go Test으로는 상태 변화를 기다리기 어렵다. polling 코드를 직접 작성해야하는 번거로움이 있다. <br>
+예를 들어 Pod가 Running 상태가 될 때까지 기다려야 한다면...<br>
+몇 번 반복할지 직접 정해야하고, timeout 직접 관리, 코드도 지저분하고...
+```
+func TestPod(t *testing.T) {
+    for i := 0; i < 10; i++ {
+        pod := getPod()
+
+        if pod.Status.Phase == "Running" {
+            return
+        }
+
+        time.Sleep(1 * time.Second)
+    }
+
+    t.Fatal("Pod is not running")
+}
+```
+
+▷ ``Ginkgo``는 testing 패키지를 확장한 테스트 프레임워크으로 비동기 검증에 효과적이다.<br>
+아래와 같이 깔끔하게 사용할 수 있다.
+```
+Eventually(func() string {
+    return getPod().Status.Phase
+}).Should(Equal("Running"))
+```
+
+
+## Ginkgo 기본 구조
+```
+var _ = Describe("API Controller", func() {
+    Context("when API resource is created", func() {
+        It("should update status to Ready", func() {
+            // test body
+        })
+    })
+})
+```
+- Describe: 테스트 대상 큰 범위
+- Context: 특정 상황
+- It: 검증하고 싶은 한 가지 행동 또는 결과
+
+### 추천 convention
+- Describe("APIDeployment Controller")
+- Context("when spec.backendRef is valid")
+- It("should create a Route resource")
+
+즉, Describe는 리소스나 controller 이름, Context는 조건, It은 기대 동작으로 잡는다.
+
+그리고 하나의 It 안에는 검증 포인트를 너무 많이 넣지 않는 게 좋다. 이유는 controller 테스트는 실패 원인이 다양해서, 한 spec이 너무 많은 걸 검증하면 디버깅이 어려워지기 때문이다.
+
+## 핵심 개념
+### 1. Eventually
+controller는 비동기적으로 동작한다. ``Create()`` 직후 상태를 바로 읽으면 아직 반영 전 일 수 있다. 이때 ``Eventually``는 일정 시간동안 반복 조회해서 기대상태(desired state)가 될 때까지 기다린다. 
+
+#### 잘못된 패턴
+```
+// Create 직후 즉시 읽으면
+// Reconcile이 아직 돌지 않았다면
+err := k8sClient.Create(ctx, api)
+Expect(err).To(Succeed())
+
+fetched := &gatewayv1.API{}
+k8sClient.Get(ctx, key, fetched)
+
+// 여기서 바로 보면 Phase == ""
+Expect(fetched.Status.Phase).
+    To(Equal("READY")) // FAIL
+```
+
+#### 올바른 패턴
+```
+// Reconcile이 완료될 때까지 기다림
+err := k8sClient.Create(ctx, api)
+Expect(err).To(Succeed())
+
+Eventually(func() string {
+    fetched := &gatewayv1.API{}
+    k8sClient.Get(ctx, key, fetched)
+    return fetched.Status.Phase
+}, 30*time.Second, time.Second).
+    Should(Equal("READY")) // OK
+```
+- Eventually(func, timeout, interval)
+timeout 생략 시 기본값 1초, interval 생략 시 10ms. Operator 테스트에서는 명시적으로 지정 권장 — 30*time.Second, time.Second
+
+### 2. envtest
+envtest란 실제 클러스터 없이 로컬에서 etcd + kube-apiserver를 바이너리로 띄워주는 도구다. CRD를 등록하고 controller-runtime Manager를 실행해서 Reconciler의 실제 동작을 검증할 수 있다. 클러스터 배포 없이 go test만으로 통합 테스트가 가능해진다.
+```
+var (
+    cfg       *rest.Config
+    k8sClient client.Client
+    testEnv   *envtest.Environment
+    ctx       context.Context
+    cancel    context.CancelFunc
+)
+
+var _ = BeforeSuite(func() {
+    ctx, cancel = context.WithCancel(context.Background())
+
+    testEnv = &envtest.Environment{
+        // CRD yaml 위치 (config/crd/bases 는 controller-gen 이 생성하는 기본 경로)
+        CRDDirectoryPaths: []string{
+            filepath.Join("..", "..", "config", "crd", "bases"),
+        },
+        ErrorIfCRDPathMissing: true,
+    }
+
+    // etcd + apiserver 시작, cfg 반환
+    var err error
+    cfg, err = testEnv.Start()
+    Expect(err).NotTo(HaveOccurred())
+
+    // scheme에 CRD 타입 등록
+    err = gatewayv1.AddToScheme(scheme.Scheme)
+    Expect(err).NotTo(HaveOccurred())
+
+    // 직접 API 호출용 client
+    k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
+    Expect(err).NotTo(HaveOccurred())
+
+    // Manager 생성 및 Reconciler 등록
+    mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme.Scheme})
+    Expect(err).NotTo(HaveOccurred())
+
+    err = (&controllers.APIReconciler{
+        Client: mgr.GetClient(),
+        Scheme: mgr.GetScheme(),
+    }).SetupWithManager(mgr)
+    Expect(err).NotTo(HaveOccurred())
+
+    // Manager를 goroutine으로 실행 (ctx로 종료 제어)
+    go func() {
+        defer GinkgoRecover()
+        err = mgr.Start(ctx)
+        Expect(err).NotTo(HaveOccurred())
+    }()
+})
+
+var _ = AfterSuite(func() {
+    cancel()                              // Manager 종료
+    err := testEnv.Stop()                 // etcd + apiserver 종료
+    Expect(err).NotTo(HaveOccurred())
+})
+```
+
+## 테스트 코드 작성
+### suite_test.go
+테스트 환경 전체를 준비하는 파일이다.
+#### BeforeSuite
+테스트 전체가 시작되기 전에 한 번만 실행
+logger 설정 / scheme 추가 / envtest.Environment 생성 / testEnv.Start() / k8sClient 초기화 / manager 시작 / controller 등록록
+```
+var _ = BeforeSuite(func() {
+    testEnv = &envtest.Environment{
+        CRDDirectoryPaths: []string{"../config/crd/bases"},
+    }
+
+    cfg, err = testEnv.Start()
+    Expect(err).NotTo(HaveOccurred())
+    Expect(cfg).NotTo(BeNil())
+
+    err = apiv1.AddToScheme(scheme.Scheme)
+    Expect(err).NotTo(HaveOccurred())
+
+    k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
+    Expect(err).NotTo(HaveOccurred())
+})
+```
+
+#### AfterSuite
+전체 테스트가 끝난 뒤 한 번 실행한다.
+envtest 정리 / goroutine 종료 / 외부 mock server 종료
+```
+var _ = AfterSuite(func() {
+    err := testEnv.Stop()
+    Expect(err).NotTo(HaveOccurred())
+})
+```
+
+#### BeforeEach
+각 ``It`` 실행 전에 매번 돌아간다.
+- 테스트용 namespace 생성
+- 공통 CRD object 초기화
+- mock server 응답 초기화
+
+#### AfterEach
+각 ``It`` 후 정리에 사용
+- 생성한 리소스 삭제
+- mock call 기록 리셋
+
+### 테스트 실행 방법
+#### CLI 설치
+```
+go install github.com/onsi/ginkgo/v2/ginkgo@latest
+```
+#### 라이브러리 추가
+```
+go get github.com/onsi/ginkgo/v2
+go get github.com/onsi/gomega
+```
+#### 의존성 정리
+```
+go mod tidy
+```
+
+#### 실행방법
+1. ginkgo CLI
+```
+ginkgo -v           # 상세 로그
+ginkgo -focus "name"  # 특정 테스트만
+ginkgo -p           # 병렬 실행
+```
+
+2. go test 기반
+---
+다음 시간에는 E2E test(multi-controller Test)와 mock 서버를 사용하는 내용으로 돌아오겠습니다.
