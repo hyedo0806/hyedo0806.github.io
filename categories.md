@@ -1,0 +1,7 @@
+---
+layout: categories
+title: Categories
+permalink: /categories/
+comments: false
+toc: false
+---
